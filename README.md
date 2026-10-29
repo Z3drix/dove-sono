@@ -1,0 +1,83 @@
+# Dove Sono?
+
+Gioco web in stile "indovina dove ti trovi": scegli una o più aree (città, comune, provincia, regione, nazione…), imposti le regole e indovini la posizione sulla mappa a partire da foto a livello strada.
+
+Tutto gratuito, senza chiavi né carte di credito:
+- **Foto**: Google Street View (predefinita), [Panoramax](https://panoramax.fr) oppure [Mapillary](https://www.mapillary.com) (serve un token gratuito), a scelta nelle impostazioni
+- **Visore 360°**: [Pannellum](https://pannellum.org)
+- **Confini delle aree**: OpenStreetMap / Nominatim; continenti e mondo intero da [Natural Earth](https://www.naturalearthdata.com)
+- **Filtri sui posti** (strade, gallerie, edifici): mappe vettoriali di [OpenFreeMap](https://openfreemap.org)
+- **Mappe**: Leaflet + OpenStreetMap
+- **Hosting**: qualsiasi hosting statico (GitHub Pages, Cloudflare Pages, Netlify)
+
+Non c'è nulla da compilare: sono solo file HTML, CSS e JS.
+
+## Come funziona Street View senza chiave
+
+Il gioco sceglie un punto a caso nell'area, scarica il riquadro di copertura Street View di Google intorno a quel punto (le "linee blu" di Google Maps) e prende un pixel colorato, cioè un tratto dove Street View c'è. Poi lo mostra con il riquadro Street View che Google Maps usa per incorporare le mappe nelle pagine (`output=svembed`). Non serve nessuna chiave API, nessun account Google Cloud e nessuna carta di credito, quindi la pagina si può condividere senza rischi di costi.
+
+Cose da sapere:
+- Né i riquadri di copertura né l'incorporamento sono API ufficiali: Google potrebbe cambiarli o disattivarli in qualsiasi momento. In quel caso restano Panoramax e Mapillary.
+- Nei test (Siderno e Italia intera) tutti i punti scelti avevano Street View. Se capitasse comunque "Street View non disponibile", c'è il pulsante **Cambia posto**, che non fa perdere il round.
+- La copertura comprende anche le foto sferiche caricate dagli utenti, quindi ogni tanto può capitare un interno o una galleria.
+- Il riquadro con indirizzo e link a Google Maps è coperto, e il link "Segnala un problema" non è cliccabile, perché rivelerebbero il posto.
+- Non si può impedire di spostarsi: la modalità "Fermo" funziona come "Libero". "Foto fissa" invece funziona (blocca ogni interazione).
+- A volte, dopo aver camminato, il riquadro di Google può diventare nero (il browser ha perso il contesto grafico, per esempio con molte schede di Street View aperte). Il pulsante **↺ Partenza** ricarica la vista e riporta al punto di partenza del round.
+
+## 1. Ottenere il token Mapillary (solo se usi Mapillary)
+
+Con Street View o Panoramax questo passaggio non serve.
+
+Nota (ottobre 2026): alcune app Mapillary appena registrate ricevono sempre zero foto anche con un token valido. Il gioco lo rileva e lo segnala; in quel caso usa Panoramax o segnalalo sul [forum di Mapillary](https://forum.mapillary.com/t/new-app-graph-api-returns-no-images-error-subcode-33/10767).
+
+
+1. Crea un account su https://www.mapillary.com (anche con Facebook o email).
+2. Vai su https://www.mapillary.com/dashboard/developers → **Register application**.
+3. Nome e descrizione a piacere; come permessi basta **Read**.
+4. Copia il **Client Token** (inizia con `MLY|`).
+
+Puoi incollarlo nella schermata iniziale del gioco (viene salvato nel browser) oppure in `config.js`, così chi apre il sito non deve inserirlo. È un token pensato per stare nel browser, non è un segreto.
+
+## 2. Provarlo sul tuo PC
+
+Serve un piccolo server locale (aprire `index.html` con doppio clic non basta per alcune richieste):
+
+```bash
+python -m http.server 8080
+```
+
+Poi apri http://localhost:8080 (il comando va lanciato dentro la cartella `geoindovina`).
+
+## 3. Pubblicarlo gratis con GitHub Pages
+
+1. Crea un repository su GitHub (es. `dove-sono`) e carica i file di questa cartella.
+2. Nel repository: **Settings → Pages → Build and deployment → Source: Deploy from a branch**, branch `main`, cartella `/ (root)`.
+3. Dopo circa un minuto il gioco è online su `https://<tuo-utente>.github.io/dove-sono/`.
+
+In alternativa: su https://app.netlify.com/drop trascini la cartella e ottieni subito un link.
+
+## Impostazioni disponibili
+
+| Impostazione | Cosa fa |
+|---|---|
+| Fonte delle foto | Google Street View (senza chiave), Panoramax (nessun token) o Mapillary |
+| Aree | Una o più aree cercate per nome, con il confine preso da OpenStreetMap, oppure i pulsanti rapidi Mondo intero / Europa / Asia / Africa / Nord America / Sud America / Oceania. L'Europa si ferma agli Urali; la Russia a est degli Urali è in Asia |
+| Round | Da 1 a 50 |
+| Tempo per round | In secondi, 0 = illimitato. Allo scadere vale il segnaposto piazzato, se c'è |
+| Movimento | Libero (con Panoramax: frecce per passare alla foto precedente/successiva della sequenza) / solo guardarsi intorno / foto fissa |
+| Punti massimi | Punti per una risposta perfetta (entro 25 m) |
+| Severità | Automatica (in base alla grandezza dell'area) o distanza manuale a cui si prende metà dei punti |
+| Più aree | Posizione scelta in proporzione alla superficie, oppure ogni area con la stessa probabilità |
+| Solo 360° | Usa solo foto panoramiche (meno posti disponibili) |
+| Confine sulla mappa | Mostra il bordo delle aree sulla mappa per indovinare |
+| Bussola | Mostra o nasconde la direzione |
+| Filtri sui posti | Tutti spenti di default (qualsiasi posto). **Solo foto delle auto Google**: scarta le foto sferiche degli utenti (puntini isolati sulla copertura, o lontani da una strada) — solo Street View. **Niente autostrade e superstrade**, **Niente gallerie**: in base alla strada più vicina (entro 25 m) su OpenStreetMap. **Solo zone abitate**: un edificio entro 120 m o una zona residenziale/commerciale |
+
+## Limiti noti della prima versione
+
+- Street View senza chiave: vedi la sezione dedicata sopra.
+- Panoramax in Italia ha foto soprattutto nelle grandi città, quasi tutte "piatte" e a volte anche al chiuso (negozi, locali). Le foto stanno su più server: se uno non risponde, il gioco lo salta e usa gli altri.
+- La copertura Mapillary è buona nelle città e a macchia nelle zone rurali: in aree molto piccole o poco fotografate la ricerca può fallire.
+- Molte foto Mapillary sono "piatte" (dashcam), non a 360°.
+- Il riquadro di attribuzione di Mapillary contiene un link alla foto originale, che rivela il posto.
+- Nominatim chiede al massimo una ricerca al secondo: va bene per un uso normale.
