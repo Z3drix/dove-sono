@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 
@@ -84,11 +84,27 @@
           <label class="check"><input data-key="panoOnly" type="checkbox"> Solo foto a 360°</label>
           <label class="check"><input data-key="showBorder" type="checkbox"> Mostra il confine dell'area sulla mappa</label>
           <label class="check"><input data-key="showCompass" type="checkbox"> Mostra la bussola</label>
-          <p class="settings-title">Filtri sui posti <small>tutti spenti = qualsiasi posto</small></p>
+          <p class="settings-title">Dove cadono i posti</p>
+          <label class="wide">Difficoltà
+            <select id="difficulty">
+              <option value="all">Tutto: qualsiasi posto, anche campagna e autostrade</option>
+              <option value="hard">Difficile: zone abitate, anche periferie</option>
+              <option value="medium">Media: centri di città e paesi</option>
+              <option value="easy">Facile: solo il centro principale di ogni area</option>
+              <option value="custom" disabled>Personalizzata (impostata qui sotto)</option>
+            </select>
+          </label>
+          <label class="wide">Zona
+            <select data-key="zone">
+              <option value="any">Ovunque nell'area</option>
+              <option value="inhabited">Zone abitate (vicino a case, anche periferie)</option>
+              <option value="cities">Centri di città e paesi (entro 350 m – 1,5 km dal centro)</option>
+              <option value="main">Centro principale dell'area (per regioni e nazioni: le città)</option>
+            </select>
+          </label>
           <label class="check"><input data-key="filterOfficial" type="checkbox"> Solo foto delle auto Google, niente foto degli utenti (solo Street View)</label>
           <label class="check"><input data-key="filterNoHighways" type="checkbox"> Niente autostrade e superstrade</label>
           <label class="check"><input data-key="filterNoTunnels" type="checkbox"> Niente gallerie</label>
-          <label class="check"><input data-key="filterInhabited" type="checkbox"> Solo zone abitate (vicino a case o paesi)</label>
         </div>
         <p id="score-hint" class="hint"></p>
         <p id="source-hint" class="hint warn"></p>
@@ -174,7 +190,7 @@
   <script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script src="config.js?v=3"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

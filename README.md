@@ -71,7 +71,9 @@ In alternativa: su https://app.netlify.com/drop trascini la cartella e ottieni s
 | Solo 360° | Usa solo foto panoramiche (meno posti disponibili) |
 | Confine sulla mappa | Mostra il bordo delle aree sulla mappa per indovinare |
 | Bussola | Mostra o nasconde la direzione |
-| Filtri sui posti | Tutti spenti di default (qualsiasi posto). **Solo foto delle auto Google**: scarta le foto sferiche degli utenti (puntini isolati sulla copertura, o lontani da una strada) — solo Street View. **Niente autostrade e superstrade**, **Niente gallerie**: in base alla strada più vicina (entro 25 m) su OpenStreetMap. **Solo zone abitate**: un edificio entro 120 m o una zona residenziale/commerciale |
+| Difficoltà | Combinazioni pronte di zona e filtri. **Tutto** (predefinita): qualsiasi posto. **Difficile**: zone abitate, anche periferie, niente gallerie. **Media**: centri di città e paesi, solo auto Google, niente autostrade né gallerie. **Facile**: come Media ma solo il centro principale di ogni area. Cambiando zona o filtri a mano diventa "Personalizzata" |
+| Zona | **Ovunque**; **Zone abitate** (un edificio entro 120 m o una zona residenziale/commerciale); **Centri di città e paesi** (entro 1,5 km dal centro di una città, 700 m di un paese, 350 m di un villaggio, dalle etichette di OpenStreetMap; le città escono più spesso); **Centro principale** (per un comune il suo centro, per regioni, nazioni e continenti i centri delle città) |
+| Filtri sui posti | **Solo foto delle auto Google**: scarta le foto sferiche degli utenti (puntini isolati sulla copertura, o lontani da una strada) — solo Street View. **Niente autostrade e superstrade**, **Niente gallerie**: in base alla strada più vicina (entro 25 m) su OpenStreetMap |
 
 ## Limiti noti della prima versione
 

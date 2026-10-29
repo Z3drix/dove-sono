@@ -24,15 +24,36 @@ const DEFAULTS = {
   panoOnly: false,
   showBorder: true,
   showCompass: true,
-  // filtri sui posti: spenti = qualsiasi posto
+  // dove cadono i posti: any = ovunque, inhabited = zone abitate, cities = centri di città e paesi,
+  // main = centro principale di ogni area. Con i filtri spenti si gioca su qualsiasi posto.
+  zone: 'any',
   filterOfficial: false,
   filterNoHighways: false,
   filterNoTunnels: false,
-  filterInhabited: false,
 };
 
+// Le difficoltà sono solo combinazioni già pronte di zona e filtri
+const DIFFICULTIES = {
+  all: { zone: 'any', filterOfficial: false, filterNoHighways: false, filterNoTunnels: false },
+  hard: { zone: 'inhabited', filterOfficial: false, filterNoHighways: false, filterNoTunnels: true },
+  medium: { zone: 'cities', filterOfficial: true, filterNoHighways: true, filterNoTunnels: true },
+  easy: { zone: 'main', filterOfficial: true, filterNoHighways: true, filterNoTunnels: true },
+};
+
+function loadSettings() {
+  const saved = store.get('dovesono.settings', {});
+  // versione precedente: il filtro "Solo zone abitate" ora è la zona "inhabited"
+  if (saved.filterInhabited && !saved.zone) saved.zone = 'inhabited';
+  delete saved.filterInhabited;
+  // valori vuoti o di versioni precedenti tornano al predefinito
+  Object.keys(saved).forEach((k) => {
+    if (saved[k] === '' || saved[k] == null || (k in DEFAULTS && typeof saved[k] !== typeof DEFAULTS[k])) delete saved[k];
+  });
+  return { ...DEFAULTS, ...saved };
+}
+
 const state = {
-  settings: { ...DEFAULTS, ...store.get('dovesono.settings', {}) },
+  settings: loadSettings(),
   areas: store.get('dovesono.areas', []), // { id, name, kind, geometry }
   token: store.get('dovesono.token', '') || (window.GEO_CONFIG && window.GEO_CONFIG.mapillaryToken) || '',
   game: null,
@@ -454,15 +475,17 @@ function coverageStartZoom(area) {
   return area.coverageZoom;
 }
 
-// Punti sulla copertura Street View vicino al punto dato, dentro l'area
-async function coveragePointsNear(lon, lat, area, count = 40) {
-  let z = coverageStartZoom(area);
+// Punti sulla copertura Street View vicino al punto dato, dentro l'area.
+// local: il punto è già dove deve essere (centro di un paese): parto dal livello della strada
+// e prendo il tratto coperto più vicino, invece di un pixel a caso.
+async function coveragePointsNear(lon, lat, area, { local = false, count = 40 } = {}) {
+  let z = local ? COVERAGE_MAX_ZOOM : coverageStartZoom(area);
   const start = tileOf(lon, lat, z);
   let tile = await coverageTile(start.x, start.y, z);
   if (!tile) return [];
 
   // primo passo: un pixel coperto a caso nel riquadro, purché dentro l'area
-  let target = null;
+  let target = local ? pixelLonLat(tile, nearestCovered(tile, lon, lat)) : null;
   for (let k = 0; k < 60 && !target; k++) {
     const p = pixelLonLat(tile, tile.covered[Math.floor(Math.random() * tile.covered.length)]);
     if (pointInArea(p, area)) target = p;
@@ -501,10 +524,10 @@ const streetViewSource = {
   needsToken: false,
   async check() {},
   // cerca da sola intorno al punto, scendendo di zoom sulla copertura
-  async searchAt(lon, lat, area) {
+  async searchAt(lon, lat, area, opts) {
     let points;
     try {
-      points = await coveragePointsNear(lon, lat, area);
+      points = await coveragePointsNear(lon, lat, area, opts);
     } catch {
       return [];
     }
@@ -548,7 +571,7 @@ function activeFilters(settings, source) {
     official: settings.filterOfficial && source === streetViewSource,
     noHighways: settings.filterNoHighways,
     noTunnels: settings.filterNoTunnels,
-    inhabited: settings.filterInhabited,
+    inhabited: settings.zone === 'inhabited',
   };
 }
 
@@ -563,10 +586,10 @@ function loadVectorTileLibs() {
   return vectorTileLibs;
 }
 
-// Strade, edifici e zone urbane del riquadro di mappa che contiene il punto, già in lon/lat
-async function ofmFeatures(lon, lat) {
-  const { x, y } = tileOf(lon, lat, OFM_ZOOM);
-  const key = `${x}/${y}`;
+// Riquadro di mappa vettoriale OpenFreeMap. Restituisce una funzione che estrae un livello
+// (strade, edifici, etichette…) come oggetti GeoJSON in lon/lat.
+function ofmTile(x, y, z) {
+  const key = `${z}/${x}/${y}`;
   if (!ofmCache.has(key)) {
     const load = (async () => {
       const { VectorTile, Pbf } = await loadVectorTileLibs();
@@ -575,7 +598,7 @@ async function ofmFeatures(lon, lat) {
         if (!res.ok || !body.tiles) throw new Error('TILES');
         ofmTilesUrl = body.tiles[0];
       }
-      const url = ofmTilesUrl.replace('{z}', OFM_ZOOM).replace('{x}', x).replace('{y}', y);
+      const url = ofmTilesUrl.replace('{z}', z).replace('{x}', x).replace('{y}', y);
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), 10000);
       let buf;
@@ -587,27 +610,85 @@ async function ofmFeatures(lon, lat) {
         clearTimeout(timer);
       }
       const vt = new VectorTile(new Pbf(buf));
-      const geo = (name, keep) => {
+      return (name, keep) => {
         const layer = vt.layers[name];
         const out = [];
         if (!layer) return out;
         for (let i = 0; i < layer.length; i++) {
           const f = layer.feature(i);
-          if (!keep || keep(f.properties)) out.push(f.toGeoJSON(x, y, OFM_ZOOM));
+          if (!keep || keep(f.properties)) out.push(f.toGeoJSON(x, y, z));
         }
         return out;
       };
-      return {
-        roads: geo('transportation', (p) => CAR_ROADS.has(p.class)),
-        buildings: geo('building'),
-        builtUp: geo('landuse', (p) => BUILT_UP.has(p.class)),
-      };
     })();
     load.catch(() => ofmCache.delete(key));
-    if (ofmCache.size > 60) ofmCache.delete(ofmCache.keys().next().value);
+    if (ofmCache.size > 80) ofmCache.delete(ofmCache.keys().next().value);
     ofmCache.set(key, load);
   }
   return ofmCache.get(key);
+}
+
+// Strade, edifici e zone urbane del riquadro di mappa che contiene il punto
+const ofmFeatureCache = new Map();
+async function ofmFeatures(lon, lat) {
+  const { x, y } = tileOf(lon, lat, OFM_ZOOM);
+  const key = `${x}/${y}`;
+  if (!ofmFeatureCache.has(key)) {
+    const geo = await ofmTile(x, y, OFM_ZOOM);
+    if (ofmFeatureCache.size > 60) ofmFeatureCache.delete(ofmFeatureCache.keys().next().value);
+    ofmFeatureCache.set(key, {
+      roads: geo('transportation', (p) => CAR_ROADS.has(p.class)),
+      buildings: geo('building'),
+      builtUp: geo('landuse', (p) => BUILT_UP.has(p.class)),
+    });
+  }
+  return ofmFeatureCache.get(key);
+}
+
+// ---------- Zona dei posti ----------
+// "Ovunque" e "Zone abitate" partono da un punto a caso nell'area; "Centri" e "Centro principale"
+// partono dal centro di una città o di un paese e cercano la foto entro pochi minuti a piedi.
+const PLACE_WEIGHTS = { city: 8, town: 4, village: 1 }; // le città escono più spesso dei paesini
+const PLACE_RADIUS_M = { city: 1500, town: 700, village: 350 };
+// Aree che hanno un "loro" centro (il municipio, la piazza): per regioni e nazioni uso le città
+const MUNICIPAL_KINDS = new Set(['city', 'town', 'village', 'municipality', 'hamlet', 'suburb',
+  'quarter', 'neighbourhood', 'city_district', 'borough', 'isolated_dwelling']);
+
+// Città e paesi (dalle etichette della mappa) nel riquadro di zoom z che contiene il punto
+async function placesNear(lon, lat, z) {
+  const { x, y } = tileOf(lon, lat, z);
+  const geo = await ofmTile(x, y, z);
+  return geo('place', (p) => p.class in PLACE_WEIGHTS)
+    .filter((f) => f.geometry.type === 'Point')
+    .map((f) => ({ coords: f.geometry.coordinates, cls: f.properties.class, name: f.properties.name }));
+}
+
+function randomPointInDisk([lon, lat], radiusM) {
+  const r = radiusM * Math.sqrt(Math.random());
+  const a = Math.random() * 2 * Math.PI;
+  const dLat = (r * Math.sin(a)) / 110540;
+  const dLon = (r * Math.cos(a)) / (111320 * Math.cos((lat * Math.PI) / 180));
+  return [lon + dLon, lat + dLat];
+}
+
+// Il centro intorno a cui cercare il posto, o null se nella zona non ce n'è uno adatto
+async function pickCenter(area, zone) {
+  if (zone === 'main' && area.center && MUNICIPAL_KINDS.has(area.kind)) {
+    return { coords: area.center, radius: PLACE_RADIUS_M[area.kind] || PLACE_RADIUS_M.town };
+  }
+  // riquadro di ~8 km per i comuni, ~35 km per regioni, nazioni e continenti
+  const z = Math.max(10, Math.min(12, coverageStartZoom(area)));
+  const [lon, lat] = randomPointInArea(area);
+  const places = (await placesNear(lon, lat, z)).filter((p) => pointInArea(p.coords, area));
+  let pool = places;
+  if (zone === 'main') {
+    // per regioni e nazioni il "centro principale" sono le città; se qui non ce ne sono, i paesi più grandi
+    pool = places.filter((p) => p.cls === 'city');
+    if (!pool.length) pool = places.filter((p) => p.cls === 'town');
+  }
+  if (!pool.length) return null;
+  const p = weightedPick(pool, (q) => PLACE_WEIGHTS[q.cls]);
+  return { coords: p.coords, radius: PLACE_RADIUS_M[p.cls] };
 }
 
 // Distanza in metri tra il punto p e il segmento a-b (approssimazione locale, va bene sotto il km)
@@ -680,11 +761,19 @@ async function tryRandomPoint(source, prepared, settings, usedIds) {
   const area = settings.weighting === 'equal'
     ? prepared[Math.floor(Math.random() * prepared.length)]
     : weightedPick(prepared, (a) => a.totalArea);
-  const [lon, lat] = randomPointInArea(area);
+
+  // Centri di città e paesi: parto da un punto vicino al centro e non mi allontano troppo
+  let center = null;
+  if (settings.zone === 'cities' || settings.zone === 'main') {
+    center = await pickCenter(area, settings.zone);
+    if (!center) throw new Error('NOT_FOUND');
+  }
+  const [lon, lat] = center ? randomPointInDisk(center.coords, center.radius) : randomPointInArea(area);
+  const nearCenter = (p) => !center || haversine(p.coords, center.coords) <= center.radius * 1.25;
 
   // searchAt: la fonte cerca da sola intorno al punto (Street View); search: dentro bbox sempre più grandi
   const searches = source.searchAt
-    ? [() => source.searchAt(lon, lat, area)]
+    ? [() => source.searchAt(lon, lat, area, { local: !!center })]
     : source.boxes.map((h) => () => source.search([lon - h, lat - h, lon + h, lat + h], settings));
 
   for (const search of searches) {
@@ -692,7 +781,8 @@ async function tryRandomPoint(source, prepared, settings, usedIds) {
     const candidates = shuffle(found.filter((p) =>
       !usedIds.has(p.id) &&
       (!settings.panoOnly || p.isPano) &&
-      pointInArea(p.coords, area)));
+      pointInArea(p.coords, area) &&
+      nearCenter(p)));
 
     let prepared = 0;
     for (const pic of candidates.slice(0, 12)) {
@@ -740,7 +830,7 @@ function locationError(code, source) {
         `(${[...deadHosts].join(', ')}). Riprova più tardi, scegli un'area più grande o un'altra fonte.`;
     default:
       return `Non ho trovato foto ${source.name} in quest'area. Prova un'area più grande, aggiungine altre, ` +
-        'disattiva "Solo foto a 360°" o qualche filtro sui posti.';
+        'disattiva "Solo foto a 360°" o scegli una difficoltà più alta (meno vincoli su dove cadono i posti).';
   }
 }
 
@@ -798,7 +888,7 @@ function readSettings() {
     const k = el.dataset.key;
     if (el.type === 'checkbox') s[k] = el.checked;
     else if (el.type === 'number') s[k] = Number(el.value) || DEFAULTS[k];
-    else s[k] = el.value;
+    else s[k] = el.value || DEFAULTS[k];
   });
   s.rounds = Math.max(1, Math.min(50, Math.round(s.rounds)));
   s.timeLimit = Math.max(0, Math.round(Number(document.querySelector('[data-key="timeLimit"]').value) || 0));
@@ -819,10 +909,15 @@ function updateHints() {
   } else if (s.filterOfficial) {
     notes.push('"Solo foto delle auto Google" vale solo con Street View.');
   }
-  if (s.filterNoHighways || s.filterNoTunnels || s.filterInhabited || (s.filterOfficial && s.source === 'streetview')) {
-    notes.push('Con i filtri attivi la ricerca di ogni posto è un po\' più lenta.');
+  if (s.zone === 'main' && state.areas.some((a) => !MUNICIPAL_KINDS.has(a.kind))) {
+    notes.push('Per regioni, nazioni e continenti il "centro principale" sono i centri delle città.');
   }
   $('#source-hint').textContent = notes.join(' ');
+
+  // La difficoltà mostra la combinazione che corrisponde a zona e filtri, o "Personalizzata"
+  const match = Object.keys(DIFFICULTIES).find((k) =>
+    Object.entries(DIFFICULTIES[k]).every(([key, value]) => s[key] === value));
+  $('#difficulty').value = match || 'custom';
   if (!state.areas.length) {
     $('#score-hint').textContent = 'Aggiungi almeno un\'area per vedere come verrà calcolato il punteggio.';
     return;
@@ -965,7 +1060,13 @@ function renderResults(items, message) {
     li.onclick = () => {
       const id = `${it.osm_type}${it.osm_id}`;
       if (!state.areas.some((a) => a.id === id)) {
-        state.areas.push({ id, name: it.name || it.display_name.split(',')[0], kind: it.addresstype, geometry: it.geojson });
+        state.areas.push({
+          id,
+          name: it.name || it.display_name.split(',')[0],
+          kind: it.addresstype,
+          center: [Number(it.lon), Number(it.lat)], // per un comune: il centro del paese
+          geometry: it.geojson,
+        });
         saveAreas();
       }
       ul.innerHTML = '';
@@ -1010,6 +1111,16 @@ function initSetup() {
   }));
 
   document.querySelectorAll('[data-key]').forEach((el) => el.addEventListener('change', updateHints));
+  $('#difficulty').addEventListener('change', (e) => {
+    const preset = DIFFICULTIES[e.target.value];
+    if (!preset) return;
+    Object.entries(preset).forEach(([key, value]) => {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el.type === 'checkbox') el.checked = value;
+      else el.value = value;
+    });
+    updateHints();
+  });
   $('#token-input').addEventListener('change', (e) => {
     state.token = e.target.value.trim();
     store.set('dovesono.token', state.token);
