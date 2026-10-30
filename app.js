@@ -1000,9 +1000,17 @@ function loadNaturalEarth() {
 }
 
 async function addPreset(key) {
+  const id = `preset-${key}`;
+  if (!PRESETS[key] || state.areas.some((a) => a.id === id)) return;
+  state.areas.push(await buildPresetArea(key));
+  saveAreas();
+  renderAreas();
+  updateHints();
+}
+
+async function buildPresetArea(key) {
   const preset = PRESETS[key];
   const id = `preset-${key}`;
-  if (!preset || state.areas.some((a) => a.id === id)) return;
   const features = await loadNaturalEarth();
   const round = (ring) => ring.map(([x, y]) => [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000]);
   const polygons = [];
@@ -1023,10 +1031,18 @@ async function addPreset(key) {
   (preset.extra || []).forEach(({ iso, clip }) => {
     features.filter((f) => f.properties.ISO_A2 === iso).forEach((f) => addFeature(f, clip));
   });
-  state.areas.push({ id, name: preset.name, kind: preset.kind, geometry: { type: 'MultiPolygon', coordinates: polygons } });
-  saveAreas();
-  renderAreas();
-  updateHints();
+  return { id, name: preset.name, kind: preset.kind, geometry: { type: 'MultiPolygon', coordinates: polygons } };
+}
+
+// Area di gioco da un risultato di Nominatim (ricerca o lookup)
+function areaFromNominatim(it) {
+  return {
+    id: `${it.osm_type}${it.osm_id}`,
+    name: it.name || it.display_name.split(',')[0],
+    kind: it.addresstype,
+    center: [Number(it.lon), Number(it.lat)], // per un comune: il centro del paese
+    geometry: it.geojson,
+  };
 }
 
 async function searchPlaces(query) {
@@ -1058,15 +1074,9 @@ function renderResults(items, message) {
     kind.textContent = KIND_LABELS[it.addresstype] || it.addresstype || it.type || '';
     li.append(name, kind);
     li.onclick = () => {
-      const id = `${it.osm_type}${it.osm_id}`;
-      if (!state.areas.some((a) => a.id === id)) {
-        state.areas.push({
-          id,
-          name: it.name || it.display_name.split(',')[0],
-          kind: it.addresstype,
-          center: [Number(it.lon), Number(it.lat)], // per un comune: il centro del paese
-          geometry: it.geojson,
-        });
+      const area = areaFromNominatim(it);
+      if (!state.areas.some((a) => a.id === area.id)) {
+        state.areas.push(area);
         saveAreas();
       }
       ul.innerHTML = '';
@@ -1076,6 +1086,221 @@ function renderResults(items, message) {
     };
     ul.appendChild(li);
   });
+}
+
+// ---------- Le mie liste ----------
+// Una lista è un nome più i codici delle aree: "R12345" (relazione OSM, anche W/N) o "preset:europe".
+// Niente confini: al caricamento si riscaricano (Nominatim lookup, Natural Earth). Le liste restano
+// in questo browser; si condividono solo come file o come link, quindi non c'è nessun elenco pubblico.
+const LISTS_KEY = 'dovesono.lists';
+const LIST_FILE_FORMAT = 'dove-sono-lista';
+const MAX_LIST_NAME = 60;
+const MAX_LIST_AREAS = 50; // limite di una richiesta di lookup di Nominatim
+
+const cleanListName = (name) => String(name || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LIST_NAME);
+
+function areaRef(area) {
+  if (area.id.startsWith('preset-')) return `preset:${area.id.slice(7)}`;
+  const m = /^(relation|way|node)(\d+)$/.exec(area.id);
+  return m ? m[1][0].toUpperCase() + m[2] : null;
+}
+
+const validRef = (ref) => /^[RWN]\d{1,12}$/.test(ref) || (/^preset:\w+$/.test(ref) && ref.slice(7) in PRESETS);
+
+function loadLists() {
+  const lists = store.get(LISTS_KEY, []);
+  return Array.isArray(lists) ? lists.filter((l) => l && cleanListName(l.name) && Array.isArray(l.refs)) : [];
+}
+
+function saveLists(lists) {
+  store.set(LISTS_KEY, lists);
+}
+
+// Riscarica le aree di una lista. Restituisce { areas, missing } (missing = codici non trovati).
+async function resolveRefs(refs) {
+  const wanted = refs.filter(validRef).slice(0, MAX_LIST_AREAS);
+  const osm = wanted.filter((r) => !r.startsWith('preset:'));
+  const found = new Map();
+  if (osm.length) {
+    const params = new URLSearchParams({
+      osm_ids: osm.join(','), format: 'jsonv2', polygon_geojson: '1', polygon_threshold: '0.003', 'accept-language': 'it',
+    });
+    const { res, body } = await fetchJson(`https://nominatim.openstreetmap.org/lookup?${params}`, 20000);
+    if (!res.ok || !Array.isArray(body)) throw new Error('LOOKUP');
+    body
+      .filter((it) => it.geojson && /Polygon/.test(it.geojson.type))
+      .forEach((it) => { const a = areaFromNominatim(it); found.set(areaRef(a), a); });
+  }
+  for (const ref of wanted.filter((r) => r.startsWith('preset:'))) {
+    found.set(ref, await buildPresetArea(ref.slice(7)));
+  }
+  return {
+    areas: wanted.filter((r) => found.has(r)).map((r) => found.get(r)),
+    missing: refs.length - wanted.filter((r) => found.has(r)).length,
+  };
+}
+
+function listsMessage(msg) {
+  $('#lists-msg').textContent = msg;
+}
+
+// Sostituisce le aree scelte con quelle della lista
+async function applyList(name, refs) {
+  listsMessage(`Carico "${name}"…`);
+  let result;
+  try {
+    result = await resolveRefs(refs);
+  } catch {
+    listsMessage(`Non riesco a caricare "${name}": controlla la connessione e riprova.`);
+    return false;
+  }
+  if (!result.areas.length) {
+    listsMessage(`Nessuna area di "${name}" è stata trovata.`);
+    return false;
+  }
+  state.areas = result.areas;
+  saveAreas();
+  renderAreas();
+  updateHints();
+  listsMessage(`Caricata "${name}": ${result.areas.length} ${result.areas.length === 1 ? 'area' : 'aree'}` +
+    (result.missing ? ` (${result.missing} non trovate).` : '.'));
+  return true;
+}
+
+function saveCurrentAsList() {
+  const name = cleanListName($('#list-name').value);
+  if (!name) { listsMessage('Scrivi un nome per la lista.'); $('#list-name').focus(); return; }
+  const refs = state.areas.map(areaRef).filter(Boolean);
+  if (!refs.length) { listsMessage('Scegli prima almeno un\'area.'); return; }
+  if (refs.length > MAX_LIST_AREAS) { listsMessage(`Una lista può avere al massimo ${MAX_LIST_AREAS} aree.`); return; }
+  const lists = loadLists();
+  const existing = lists.find((l) => l.name.toLowerCase() === name.toLowerCase());
+  if (existing) existing.refs = refs;
+  else lists.push({ name, refs });
+  saveLists(lists);
+  $('#list-name').value = '';
+  renderLists();
+  listsMessage(existing ? `Lista "${name}" aggiornata.` : `Lista "${name}" salvata.`);
+}
+
+function shareLink(list) {
+  const params = new URLSearchParams({ lista: list.name, aree: list.refs.join(',') });
+  return `${location.origin}${location.pathname}?${params}`;
+}
+
+async function copyShareLink(list) {
+  const link = shareLink(list);
+  try {
+    await navigator.clipboard.writeText(link);
+    listsMessage(`Link di "${list.name}" copiato: incollalo dove vuoi per condividere la lista.`);
+  } catch {
+    // appunti non disponibili: mostro il link da copiare a mano
+    $('#list-link').value = link;
+    $('#list-link').hidden = false;
+    $('#list-link').select();
+    listsMessage(`Copia il link di "${list.name}":`);
+  }
+}
+
+function exportList(list) {
+  const data = { formato: LIST_FILE_FORMAT, versione: 1, nome: list.name, aree: list.refs };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${list.name.replace(/[^\w\- àèéìòù]/gi, '').trim() || 'lista'}.dovesono.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  listsMessage(`File di "${list.name}" scaricato.`);
+}
+
+// Aggiunge (o aggiorna) una lista arrivata da file o link e la carica
+async function addIncomingList(name, refs) {
+  name = cleanListName(name) || 'Lista condivisa';
+  refs = (Array.isArray(refs) ? refs : []).map(String).filter(validRef).slice(0, MAX_LIST_AREAS);
+  if (!refs.length) { listsMessage('La lista non contiene aree valide.'); return; }
+  if (!(await applyList(name, refs))) return;
+  const lists = loadLists();
+  const existing = lists.find((l) => l.name.toLowerCase() === name.toLowerCase());
+  if (existing) existing.refs = refs;
+  else lists.push({ name, refs });
+  saveLists(lists);
+  renderLists();
+}
+
+async function importListFile(file) {
+  let data;
+  try {
+    if (file.size > 100000) throw new Error('SIZE');
+    data = JSON.parse(await file.text());
+    if (data.formato !== LIST_FILE_FORMAT) throw new Error('FORMAT');
+  } catch {
+    listsMessage('Questo file non è una lista di Dove Sono?.');
+    return;
+  }
+  await addIncomingList(data.nome, data.aree);
+}
+
+// Link condiviso: ?lista=Nome&aree=R1,R2,preset:europe
+async function handleSharedLink() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('aree')) return;
+  const refs = params.get('aree').split(',');
+  const name = params.get('lista');
+  history.replaceState(null, '', location.pathname); // il link non resta nella barra degli indirizzi
+  await addIncomingList(name, refs);
+}
+
+let listDeleteArmed = null;
+function renderLists() {
+  const ul = $('#lists');
+  ul.innerHTML = '';
+  const lists = loadLists();
+  $('#lists-empty').hidden = lists.length > 0;
+  lists.forEach((list, i) => {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'list-name';
+    name.textContent = list.name;
+    const count = document.createElement('small');
+    count.textContent = `${list.refs.length} ${list.refs.length === 1 ? 'area' : 'aree'}`;
+    name.appendChild(count);
+    const actions = document.createElement('span');
+    actions.className = 'list-actions';
+    const button = (label, title, onClick, cls = '') => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      if (cls) b.className = cls;
+      b.onclick = onClick;
+      actions.appendChild(b);
+      return b;
+    };
+    button('Carica', 'Sostituisce le aree scelte con quelle della lista', () => applyList(list.name, list.refs), 'primary');
+    button('Link', 'Copia un link che apre il gioco con questa lista', () => copyShareLink(list));
+    button('File', 'Scarica la lista come file da passare ad altri', () => exportList(list));
+    const del = button(listDeleteArmed === i ? 'Sicuro?' : '✕', 'Elimina la lista', () => {
+      if (listDeleteArmed !== i) { listDeleteArmed = i; renderLists(); setTimeout(() => { if (listDeleteArmed === i) { listDeleteArmed = null; renderLists(); } }, 3000); return; }
+      listDeleteArmed = null;
+      saveLists(loadLists().filter((_, j) => j !== i));
+      renderLists();
+      listsMessage(`Lista "${list.name}" eliminata.`);
+    }, listDeleteArmed === i ? 'danger' : '');
+    del.setAttribute('aria-label', `Elimina la lista ${list.name}`);
+    li.append(name, actions);
+    ul.appendChild(li);
+  });
+}
+
+function initLists() {
+  $('#list-save-form').addEventListener('submit', (e) => { e.preventDefault(); saveCurrentAsList(); });
+  $('#list-import').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (file) importListFile(file);
+  });
+  renderLists();
+  handleSharedLink();
 }
 
 function initSetup() {
@@ -1127,6 +1352,7 @@ function initSetup() {
   });
   $('#start-btn').addEventListener('click', startGame);
   renderSetup();
+  initLists();
 }
 
 // ---------- Partita ----------
@@ -1443,7 +1669,7 @@ function showSetupError(msg) {
 // la prima volta che si preme "Cambia posto" in una partita. In più, se attivo in config.js, ogni round
 // manda un registro leggero, per confrontare i posti riusciti con quelli segnalati.
 // Si inviano solo dati tecnici (niente nome, email o account) a un Modulo Google indicato in config.js.
-const APP_VERSION = '6';
+const APP_VERSION = '7';
 const diagLog = [];
 
 function diag(msg) {

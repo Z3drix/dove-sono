@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.css">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 
@@ -38,6 +38,21 @@
         <ul id="search-results" class="results"></ul>
         <div id="chips" class="chips"></div>
         <div id="preview-map" class="preview-map"></div>
+
+        <div class="lists">
+          <p class="lists-title">Le mie liste <small>salvate solo in questo browser</small></p>
+          <form id="list-save-form" class="search">
+            <input id="list-name" type="text" maxlength="60" placeholder="Nome della lista" autocomplete="off" aria-label="Nome della lista">
+            <button type="submit">Salva le aree scelte</button>
+          </form>
+          <p id="lists-empty" class="hint">Nessuna lista salvata. Scegli delle aree, dai un nome e salvale: la prossima volta le ricarichi con un clic.</p>
+          <ul id="lists" class="lists-items"></ul>
+          <label class="file-btn">Importa una lista da file
+            <input id="list-import" type="file" accept=".json,application/json">
+          </label>
+          <input id="list-link" class="list-link" type="text" readonly hidden aria-label="Link della lista">
+          <p id="lists-msg" class="hint" aria-live="polite"></p>
+        </div>
       </div>
 
       <div class="panel">
@@ -203,7 +218,7 @@
   <script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-  <script src="config.js?v=6"></script>
-  <script src="app.js?v=6"></script>
+  <script src="config.js?v=7"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

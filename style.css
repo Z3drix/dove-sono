@@ -85,6 +85,29 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .chips .empty { color: var(--muted); font-size: .9rem; }
 .preview-map { height: 360px; border-radius: var(--radius); border: 1px solid var(--line); }
 
+/* Le mie liste */
+.lists { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.lists-title { margin: 0; font-weight: 600; }
+.lists-title small { font-weight: 400; color: var(--muted); margin-left: 6px; }
+.lists .hint { margin: 0; }
+.lists-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lists-items li {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);
+}
+.list-name { min-width: 0; overflow-wrap: anywhere; }
+.list-name small { color: var(--muted); margin-left: 8px; }
+.list-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.list-actions button { padding: 4px 10px; font-size: .88rem; }
+.list-actions button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.file-btn {
+  align-self: flex-start; cursor: pointer; font-size: .88rem;
+  border: 1px dashed var(--line); border-radius: 8px; padding: 6px 12px; color: var(--muted);
+}
+.file-btn:hover { border-color: var(--muted); color: var(--text); }
+.file-btn input { display: none; }
+.list-link { font-size: .85rem; }
+
 .settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 520px) { .settings { grid-template-columns: 1fr; } }
 .settings label { display: flex; flex-direction: column; gap: 4px; font-size: .88rem; color: var(--muted); }

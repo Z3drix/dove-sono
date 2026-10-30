@@ -24,6 +24,15 @@ Cose da sapere:
 - Non si può impedire di spostarsi: la modalità "Fermo" funziona come "Libero". "Foto fissa" invece funziona (blocca ogni interazione).
 - A volte, dopo aver camminato, il riquadro di Google può diventare nero (il browser ha perso il contesto grafico, per esempio con molte schede di Street View aperte). Il pulsante **↺ Partenza** ricarica la vista e riporta al punto di partenza del round.
 
+## Le mie liste
+
+Sotto la mappa delle aree puoi salvare la selezione attuale con un nome e ricaricarla con un clic.
+Le liste restano solo nel tuo browser; per passarle ad altri:
+- **Link**: copia un indirizzo del gioco che, aperto, carica la lista e la salva tra le liste di chi lo apre;
+- **File**: scarica un piccolo file `.dovesono.json` da importare con "Importa una lista da file".
+
+Una lista contiene solo il nome e i codici delle aree (codici OpenStreetMap come `R39597`, oppure `preset:europe` per i continenti), al massimo 50 aree: i confini vengono riscaricati al caricamento. Non esiste un elenco pubblico di liste.
+
 ## Segnalazioni anonime
 
 Per capire perché ogni tanto compare "Street View non disponibile", il gioco (solo con Street View) invia dati tecnici a un Modulo Google:
