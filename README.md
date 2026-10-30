@@ -18,11 +18,21 @@ Il gioco sceglie un punto a caso nell'area, scarica il riquadro di copertura Str
 
 Cose da sapere:
 - Né i riquadri di copertura né l'incorporamento sono API ufficiali: Google potrebbe cambiarli o disattivarli in qualsiasi momento. In quel caso restano Panoramax e Mapillary.
-- Nei test (Siderno e Italia intera) tutti i punti scelti avevano Street View. Se capitasse comunque "Street View non disponibile", c'è il pulsante **Cambia posto**, che non fa perdere il round.
+- Ogni tanto può comparire "Street View non disponibile": usa il tasto **⚠ Non c'è Street View**, che invia una segnalazione e passa a un altro posto (vedi sotto). **Cambia posto** passa a un altro posto senza inviare niente; nessuno dei due fa perdere il round.
 - La copertura comprende anche le foto sferiche caricate dagli utenti, quindi ogni tanto può capitare un interno o una galleria.
 - Il riquadro con indirizzo e link a Google Maps è coperto, e il link "Segnala un problema" non è cliccabile, perché rivelerebbero il posto.
 - Non si può impedire di spostarsi: la modalità "Fermo" funziona come "Libero". "Foto fissa" invece funziona (blocca ogni interazione).
 - A volte, dopo aver camminato, il riquadro di Google può diventare nero (il browser ha perso il contesto grafico, per esempio con molte schede di Street View aperte). Il pulsante **↺ Partenza** ricarica la vista e riporta al punto di partenza del round.
+
+## Segnalazioni anonime
+
+Per capire perché ogni tanto compare "Street View non disponibile", il gioco (solo con Street View) invia dati tecnici a un Modulo Google:
+- quando si preme **⚠ Non c'è Street View**, oppure si risponde "Sì, segnala" alla domanda che compare la prima volta in ogni partita che si preme **Cambia posto**: una segnalazione completa;
+- alla fine di ogni round: un registro leggero (risposta data, tempo scaduto o posto cambiato), per confrontare i posti riusciti con quelli segnalati.
+
+Cosa viene inviato: l'indirizzo del riquadro Street View (coordinate e direzione del posto), cosa dice la copertura di Google su quel punto, i tempi di caricamento, le impostazioni e le aree scelte, il tipo di browser, la lingua e le dimensioni dello schermo; nelle segnalazioni anche gli ultimi eventi della pagina (caricamenti, pagina nascosta, "Partenza" premuto). **Non** vengono inviati nome, email, account o altri dati personali.
+
+Per usare un altro modulo, o spegnere tutto, modifica `reportFormUrl`, `reportFormEntry` e `logAllRounds` in `config.js` (vuoti = nessun invio).
 
 ## 1. Ottenere il token Mapillary (solo se usi Mapillary)
 

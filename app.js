@@ -1154,6 +1154,11 @@ function startGame() {
     rounds: [], // { answer, guess, distance, points, areaName }
     usedIds: new Set(),
     next: null,
+    // per le segnalazioni: la domanda su "Cambia posto" compare una volta per partita
+    askedSkipReason: false,
+    skips: 0,
+    frameLoads: [],
+    startPresses: 0,
   };
 
   show('game');
@@ -1162,6 +1167,7 @@ function startGame() {
   $('#px-viewer').style.display = source === panoramaxSource ? '' : 'none';
   $('#sv-viewer').style.display = source === streetViewSource ? '' : 'none';
   $('#skip-btn').style.display = source === streetViewSource ? '' : 'none';
+  $('#report-btn').style.display = source === streetViewSource ? '' : 'none';
   setupGuessMap();
   playRound();
 }
@@ -1234,6 +1240,9 @@ async function playRound() {
   if (g.next) g.next.catch(() => {});
 
   resetGuessMap();
+  g.frameLoads = [];
+  g.startPresses = 0;
+  g.roundStartedAt = Date.now();
   try {
     await g.source.show(loc, g.settings);
   } catch {
@@ -1244,6 +1253,7 @@ async function playRound() {
   }
   $('#loading').classList.remove('show');
   g.locked = false;
+  diag(`round ${g.round} mostrato`);
   startTimer();
 }
 
@@ -1269,8 +1279,10 @@ function startTimer() {
 function submitGuess(timedOut) {
   const g = state.game;
   if (!g || g.locked) return;
+  logRound(timedOut ? 'tempo-scaduto' : 'risposta');
   g.locked = true;
   clearInterval(timerId);
+  closeSkipAsk();
 
   const answer = g.current.coords;
   let guess = null, distance = null, points = 0;
@@ -1364,15 +1376,20 @@ function showSummary() {
 function endGame() {
   clearInterval(timerId);
   state.game = null;
+  closeSkipAsk();
   Object.values(SOURCES).forEach((s) => s.destroy());
   $('#loading').classList.remove('show');
 }
 
 // Con Street View senza chiave non posso sapere se il panorama c'è: il giocatore può chiedere un altro posto.
-function skipLocation() {
+// esito: "cambiato" (non piaceva) o "segnalato" (in quel caso parte già la segnalazione completa)
+function skipLocation(esito = 'cambiato') {
   const g = state.game;
   if (!g || g.locked) return;
   clearInterval(timerId);
+  if (esito === 'cambiato') logRound('cambiato');
+  g.skips = (g.skips || 0) + 1;
+  diag(`cambia posto (${esito})`);
   g.round -= 1;
   playRound();
 }
@@ -1382,6 +1399,8 @@ function skipLocation() {
 async function backToStart() {
   const g = state.game;
   if (!g || g.locked || !g.current) return;
+  g.startPresses += 1;
+  diag('torna alla partenza');
   try {
     await g.source.show(g.current, g.settings);
   } catch {
@@ -1418,8 +1437,209 @@ function showSetupError(msg) {
   $('#setup-error').textContent = msg;
 }
 
+// ---------- Segnalazioni anonime e registro dei round ----------
+// Il riquadro di Google non dice alla pagina se il panorama manca (e non lascia vedere clic e tocchi
+// al suo interno), quindi lo segnala chi gioca: con il tasto ⚠, o rispondendo alla domanda che compare
+// la prima volta che si preme "Cambia posto" in una partita. In più, se attivo in config.js, ogni round
+// manda un registro leggero, per confrontare i posti riusciti con quelli segnalati.
+// Si inviano solo dati tecnici (niente nome, email o account) a un Modulo Google indicato in config.js.
+const APP_VERSION = '6';
+const diagLog = [];
+
+function diag(msg) {
+  diagLog.push(`${Math.round(performance.now() / 1000)}s ${msg}`);
+  if (diagLog.length > 40) diagLog.shift();
+}
+document.addEventListener('visibilitychange', () => diag(`visibilità ${document.visibilityState}`));
+window.addEventListener('blur', () => diag('blur (focus fuori dalla pagina o nel riquadro)'));
+window.addEventListener('focus', () => diag('focus'));
+$('#sv-frame').addEventListener('load', () => {
+  diag('riquadro Street View caricato');
+  const g = state.game;
+  // secondi dall'inizio del round a ogni caricamento del riquadro (Google a volte ricarica dopo un reindirizzamento)
+  if (g && g.roundStartedAt) g.frameLoads.push(Math.round((Date.now() - g.roundStartedAt) / 100) / 10);
+});
+
+// Ritaglio di 24×24 pixel della copertura intorno al punto (~45 m di lato):
+// "#" = linea piena, "+" = bordo sfumato, "." = niente, "O" = il punto del round
+function coverageCrop(tile, px, py, half = 12) {
+  const rows = [];
+  for (let y = py - half; y < py + half; y++) {
+    let row = '';
+    for (let x = px - half; x < px + half; x++) {
+      if (x === px && y === py) { row += 'O'; continue; }
+      const a = x < 0 || y < 0 || x > 255 || y > 255 ? 0 : tile.alpha[y * 256 + x];
+      row += a > 128 ? '#' : a > 0 ? '+' : '.';
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+// Cosa dice la copertura di Google, adesso, sul punto del round
+async function coverageCheck([lon, lat], withCrop) {
+  const z = COVERAGE_MAX_ZOOM;
+  const { x, y } = tileOf(lon, lat, z);
+  const tile = await coverageTile(x, y, z);
+  if (!tile) return { zoom: z, riquadroVuoto: true };
+  const n = 2 ** z;
+  const rad = (lat * Math.PI) / 180;
+  const px = Math.floor((((lon + 180) / 360) * n - x) * 256);
+  const py = Math.floor((((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n - y) * 256);
+  const nearest = pixelLonLat(tile, nearestCovered(tile, lon, lat));
+  return {
+    zoom: z,
+    riquadroVuoto: false,
+    alphaSulPunto: tile.alpha[py * 256 + px],
+    pixelCoperti: tile.covered.length,
+    metriDalPixelCopertoPiuVicino: Math.round(haversine(nearest, [lon, lat]) * 10) / 10,
+    ...(withCrop ? { ritaglio: coverageCrop(tile, px, py) } : {}),
+  };
+}
+
+// tipo: "segnalazione" (pacchetto completo) o "round" (registro leggero); esito: come è finito il round
+async function buildReport(tipo, esito) {
+  const g = state.game;
+  const loc = g && g.current;
+  const s = g ? g.settings : state.settings;
+  const full = tipo === 'segnalazione';
+  // tutto ciò che riguarda il round va letto subito: durante l'attesa il gioco può già passare al prossimo
+  const report = {
+    versione: APP_VERSION,
+    quando: new Date().toISOString(),
+    tipo,
+    esito,
+    fonte: s.source,
+    impostazioni: {
+      zona: s.zone, soloAutoGoogle: s.filterOfficial, nienteAutostrade: s.filterNoHighways,
+      nienteGallerie: s.filterNoTunnels, movimento: s.moveMode, solo360: s.panoOnly,
+    },
+    aree: state.areas.map((a) => ({ nome: a.name, tipo: a.kind })),
+    round: g ? g.round : null,
+    secondiNelRound: g && g.roundStartedAt ? Math.round((Date.now() - g.roundStartedAt) / 1000) : null,
+    caricamentiRiquadro: g ? [...g.frameLoads] : [],
+    partenzaPremuta: g ? g.startPresses : 0,
+    cambiPostoNellaPartita: g ? g.skips || 0 : 0,
+    posto: loc ? {
+      lat: Number(loc.coords[1].toFixed(6)),
+      lon: Number(loc.coords[0].toFixed(6)),
+      direzione: loc.heading == null ? null : Math.round(loc.heading),
+      lineaAutoGoogle: loc.lineLike,
+      area: loc.areaName,
+    } : null,
+    riquadro: g && g.source === streetViewSource ? $('#sv-frame').src : null,
+    copertura: null,
+    ambiente: {
+      browser: navigator.userAgent,
+      lingua: navigator.language,
+      schermo: `${screen.width}x${screen.height}`,
+      finestra: `${innerWidth}x${innerHeight}`,
+      densitaPixel: devicePixelRatio,
+      touch: navigator.maxTouchPoints > 0,
+    },
+    ...(full ? { eventi: diagLog.slice(-25) } : {}),
+  };
+  if (loc && g.source === streetViewSource) {
+    try {
+      report.copertura = await coverageCheck(loc.coords, full);
+    } catch {
+      report.copertura = { errore: 'riquadro di copertura non scaricabile' };
+    }
+  }
+  return report;
+}
+
+const reportConfig = () => window.GEO_CONFIG || {};
+const reportsEnabled = () => !!(reportConfig().reportFormUrl && reportConfig().reportFormEntry);
+
+async function sendReport(report) {
+  if (report.tipo === 'segnalazione') {
+    const saved = store.get('dovesono.reports', []);
+    saved.push(report);
+    store.set('dovesono.reports', saved.slice(-30));
+  }
+
+  const cfg = reportConfig();
+  if (reportsEnabled()) {
+    // I Moduli Google non rispondono alle pagine di altri siti: l'invio è "alla cieca" (no-cors)
+    await fetch(cfg.reportFormUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: new URLSearchParams({ [cfg.reportFormEntry]: JSON.stringify(report) }),
+    });
+    return 'sent';
+  }
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    return 'copied';
+  } catch {
+    return 'kept';
+  }
+}
+
+let toastTimer = null;
+function toast(msg) {
+  clearTimeout(toastTimer);
+  $('#toast').textContent = msg;
+  $('#toast').hidden = false;
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 3000);
+}
+
+// Registro leggero di fine round (solo Street View, solo se attivo in config.js). Non blocca il gioco.
+function logRound(esito) {
+  const g = state.game;
+  if (!g || !g.current || g.source !== streetViewSource || !reportsEnabled() || reportConfig().logAllRounds === false) return;
+  buildReport('round', esito).then(sendReport).catch(() => {});
+}
+
+// Segnalazione "non c'è Street View": raccoglie i dati, invia senza chiedere niente e passa a un altro posto
+async function reportNoStreetView() {
+  const g = state.game;
+  if (!g || g.locked || !g.current) return;
+  $('#report-btn').disabled = true;
+  let report;
+  try {
+    report = await buildReport('segnalazione', 'non-ce-street-view');
+  } catch {
+    report = null;
+  }
+  // il cambio posto non aspetta l'invio
+  if (state.game === g && !g.locked) skipLocation('segnalato');
+  $('#report-btn').disabled = false;
+  if (!report) return;
+  try {
+    const result = await sendReport(report);
+    diag(`segnalazione inviata (${result})`);
+    toast(result === 'sent' ? 'Segnalazione inviata, grazie.' : 'Segnalazione salvata (invio non ancora configurato).');
+  } catch {
+    toast('Segnalazione non inviata: controlla la connessione.');
+  }
+}
+
+// "Cambia posto": la prima volta in ogni partita chiede il motivo, poi cambia posto e basta
+function onSkipClick() {
+  const g = state.game;
+  if (!g || g.locked) return;
+  if (g.source === streetViewSource && !g.askedSkipReason) {
+    g.askedSkipReason = true;
+    $('#skip-ask').hidden = false;
+    $('#skip-ask-yes').focus();
+    return;
+  }
+  skipLocation();
+}
+
+function closeSkipAsk() {
+  $('#skip-ask').hidden = true;
+}
+
 $('#next-btn').addEventListener('click', nextRound);
-$('#skip-btn').addEventListener('click', skipLocation);
+$('#skip-btn').addEventListener('click', onSkipClick);
+$('#report-btn').addEventListener('click', reportNoStreetView);
+$('#skip-ask-yes').addEventListener('click', () => { closeSkipAsk(); reportNoStreetView(); });
+$('#skip-ask-no').addEventListener('click', () => { closeSkipAsk(); skipLocation(); });
+$('#skip-ask-close').addEventListener('click', closeSkipAsk);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#skip-ask').hidden) closeSkipAsk(); });
 $('#start-pos-btn').addEventListener('click', backToStart);
 $('#px-prev').addEventListener('click', () => panoramaxStep('prev'));
 $('#px-next').addEventListener('click', () => panoramaxStep('next'));

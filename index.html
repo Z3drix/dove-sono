@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.css">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
 
@@ -148,9 +148,22 @@
       <div class="hud-box"><span>Punti</span><strong id="hud-score">0</strong></div>
       <div class="hud-box" id="hud-timer-box"><span>Tempo</span><strong id="hud-timer">–</strong></div>
       <div class="hud-actions">
+        <button id="report-btn" class="ghost" title="Premilo se compare &quot;Street View non disponibile&quot;: invia una segnalazione anonima (solo dati tecnici del round) e passa a un altro posto">⚠<span class="label"> Non c'è Street View</span></button>
         <button id="start-pos-btn" class="ghost" title="Torna al punto di partenza (ricarica anche la vista se è diventata nera)">↺<span class="label"> Partenza</span></button>
-        <button id="skip-btn" class="ghost" title="Usalo se Street View non è disponibile qui: il round non conta">Cambia posto</button>
+        <button id="skip-btn" class="ghost" title="Passa a un altro posto, senza inviare niente: il round non conta">Cambia posto</button>
         <button id="quit-btn" class="ghost">Esci</button>
+      </div>
+    </div>
+    <p id="toast" class="toast" aria-live="polite" hidden></p>
+    <div id="skip-ask" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="skip-ask-title">
+        <button id="skip-ask-close" class="ghost small modal-close" aria-label="Chiudi e resta qui">×</button>
+        <p id="skip-ask-title" class="modal-title">Hai cambiato posto perché non c'era Street View?</p>
+        <p class="modal-text">Se sì, inviamo una segnalazione anonima con i dati tecnici del round (niente nome, email o account), così capiamo perché succede. Te lo chiediamo una volta per partita: poi puoi usare il tasto ⚠ in alto.</p>
+        <div class="row">
+          <button id="skip-ask-yes" class="primary">Sì, segnala</button>
+          <button id="skip-ask-no" class="ghost">No, non mi piaceva</button>
+        </div>
       </div>
     </div>
     <div id="guess-wrap" class="guess-wrap">
@@ -190,7 +203,7 @@
   <script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-  <script src="config.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <script src="config.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
