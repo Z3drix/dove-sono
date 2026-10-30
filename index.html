@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.css">
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
 
@@ -101,15 +101,16 @@
           <label class="check"><input data-key="showCompass" type="checkbox"> Mostra la bussola</label>
           <p class="settings-title">Dove cadono i posti</p>
           <label class="wide">Difficoltà
-            <select id="difficulty">
-              <option value="all">Tutto: qualsiasi posto, anche campagna e autostrade</option>
-              <option value="hard">Difficile: zone abitate, anche periferie</option>
-              <option value="medium">Media: centri di città e paesi</option>
-              <option value="easy">Facile: solo il centro principale di ogni area</option>
-              <option value="custom" disabled>Personalizzata (impostata qui sotto)</option>
+            <select id="difficulty" data-key="level">
+              <option value="all">Tutto (qualsiasi posto)</option>
+              <option value="easy">Facile</option>
+              <option value="medium">Media</option>
+              <option value="hard">Difficile</option>
+              <option value="custom">Personalizzata (scegli la zona)</option>
             </select>
           </label>
-          <label class="wide">Zona
+          <p id="level-hint" class="level-hint"></p>
+          <label class="wide" id="zone-row">Zona
             <select data-key="zone">
               <option value="any">Ovunque nell'area</option>
               <option value="inhabited">Zone abitate (vicino a case, anche periferie)</option>
@@ -218,7 +219,7 @@
   <script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pannellum/2.5.6/pannellum.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-  <script src="config.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="config.js?v=14"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

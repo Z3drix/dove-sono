@@ -24,27 +24,32 @@ const DEFAULTS = {
   panoOnly: false,
   showBorder: true,
   showCompass: true,
-  // dove cadono i posti: any = ovunque, inhabited = zone abitate, cities = centri di città e paesi,
-  // main = centro principale di ogni area. Con i filtri spenti si gioca su qualsiasi posto.
+  // difficoltà: all = qualsiasi posto, hard / medium / easy = fasce di punteggio del posto (vedi "Difficoltà"),
+  // custom = solo la Zona scelta a mano
+  level: 'all',
+  // zona (solo con level "custom"): any = ovunque, inhabited = zone abitate, cities = centri di città e paesi,
+  // main = centro principale di ogni area
   zone: 'any',
   filterOfficial: false,
   filterNoHighways: false,
   filterNoTunnels: false,
 };
 
-// Le difficoltà sono solo combinazioni già pronte di zona e filtri
-const DIFFICULTIES = {
-  all: { zone: 'any', filterOfficial: false, filterNoHighways: false, filterNoTunnels: false },
-  hard: { zone: 'inhabited', filterOfficial: false, filterNoHighways: false, filterNoTunnels: true },
-  medium: { zone: 'cities', filterOfficial: true, filterNoHighways: true, filterNoTunnels: true },
-  easy: { zone: 'main', filterOfficial: true, filterNoHighways: true, filterNoTunnels: true },
+// Filtri consigliati per ogni livello: si applicano quando si sceglie il livello, poi si possono cambiare
+const LEVEL_FILTERS = {
+  all: { filterOfficial: false, filterNoHighways: false, filterNoTunnels: false },
+  hard: { filterOfficial: false, filterNoHighways: false, filterNoTunnels: true },
+  medium: { filterOfficial: true, filterNoHighways: true, filterNoTunnels: true },
+  easy: { filterOfficial: true, filterNoHighways: true, filterNoTunnels: true },
 };
 
 function loadSettings() {
   const saved = store.get('dovesono.settings', {});
-  // versione precedente: il filtro "Solo zone abitate" ora è la zona "inhabited"
+  // versioni precedenti: il filtro "Solo zone abitate" è diventato la zona "inhabited",
+  // e prima dei livelli la difficoltà era solo la zona
   if (saved.filterInhabited && !saved.zone) saved.zone = 'inhabited';
   delete saved.filterInhabited;
+  if (!saved.level) saved.level = saved.zone && saved.zone !== 'any' ? 'custom' : 'all';
   // valori vuoti o di versioni precedenti tornano al predefinito
   Object.keys(saved).forEach((k) => {
     if (saved[k] === '' || saved[k] == null || (k in DEFAULTS && typeof saved[k] !== typeof DEFAULTS[k])) delete saved[k];
@@ -571,7 +576,7 @@ function activeFilters(settings, source) {
     official: settings.filterOfficial && source === streetViewSource,
     noHighways: settings.filterNoHighways,
     noTunnels: settings.filterNoTunnels,
-    inhabited: settings.zone === 'inhabited',
+    inhabited: settings.level === 'custom' && settings.zone === 'inhabited',
   };
 }
 
@@ -640,6 +645,7 @@ async function ofmFeatures(lon, lat) {
       roads: geo('transportation', (p) => CAR_ROADS.has(p.class)),
       buildings: geo('building'),
       builtUp: geo('landuse', (p) => BUILT_UP.has(p.class)),
+      pois: geo('poi'), // negozi, bar, chiese, uffici…: gli "indizi" per la difficoltà
     });
   }
   return ofmFeatureCache.get(key);
@@ -753,22 +759,148 @@ async function passesFilters(pic, settings, source) {
   return true;
 }
 
+// ---------- Difficoltà: punteggio del posto ----------
+// Ogni posto riceve un punteggio da 0 (difficile) a 10 (facile) sommando quattro criteri:
+//   notorietà  0–3  quanto si scrive dei dintorni: KB totali degli articoli di Wikipedia inglese entro 500 m
+//                   (Times Square ~6.700, Colosseo ~560, centro di Livorno ~150, periferie e paesini ~0).
+//                   Le letture giornaliere sarebbero più adatte, ma Wikipedia le dà solo per poche pagine a richiesta.
+//   grandezza  0–3  città 3, paese 2, villaggio 1 (se il posto è dentro il centro abitato)
+//   indizi     0–3  negozi, bar, chiese, uffici… entro 150 m (OpenStreetMap)
+//   strada     0–1  sta su una strada principale
+// e ogni livello accetta una fascia di punteggio.
+const FAME_RADIUS_M = 500;
+const CLUES_RADIUS_M = 150;
+const MAIN_ROADS = new Set(['trunk', 'primary', 'secondary', 'tertiary']);
+const PLACE_SIZE = { city: 3, town: 2, village: 1 };
+const fameCache = new Map();
+
+const LEVEL_HINTS = {
+  all: 'Qualsiasi posto con Street View, anche campagna, montagna e autostrade.',
+  easy: 'Centri di città con negozi e strade principali, spesso vicino a luoghi noti.',
+  medium: 'Centri di paesi e città con qualche indizio, ma non i posti famosi.',
+  hard: 'Frazioni, periferie e paesini con pochi indizi e niente di noto nei dintorni.',
+  custom: 'Scegli tu la zona qui sotto; i filtri si applicano come al solito.',
+};
+
+// relax (0–2) allarga la fascia dopo vari tentativi falliti: in un paese piccolo nessun posto
+// è famoso, quindi "Facile" deve accontentarsi di un punteggio più basso.
+const LEVELS = {
+  easy: (s, relax = 0) => s.punteggio >= 6 - relax,
+  medium: (s) => s.punteggio >= 3 && s.punteggio <= 5 && s.notorieta <= 1, // niente posti famosi
+  hard: (s, relax = 0) => s.punteggio <= 2 + relax && s.abitato, // periferie e frazioni, non campagna aperta
+};
+
+// Articoli di Wikipedia inglese entro radius metri, con la lunghezza in KB
+async function wikiArticlesNear([lon, lat], radius, limit = 100) {
+  const params = new URLSearchParams({
+    action: 'query', format: 'json', origin: '*', generator: 'geosearch',
+    ggscoord: `${lat.toFixed(5)}|${lon.toFixed(5)}`, ggsradius: String(radius), ggslimit: String(limit),
+    prop: 'info|coordinates', colimit: 'max',
+  });
+  const { res, body } = await fetchJson(`https://en.wikipedia.org/w/api.php?${params}`, 10000);
+  if (!res.ok) throw new Error('WIKI');
+  return Object.values((body.query && body.query.pages) || {}).map((p) => ({
+    title: p.title,
+    kb: (p.length || 0) / 1000,
+    coords: p.coordinates ? [p.coordinates[0].lon, p.coordinates[0].lat] : null,
+  }));
+}
+
+// KB totali degli articoli vicini al punto; null se Wikipedia non risponde
+async function fameAt(p) {
+  const key = `${p[0].toFixed(3)},${p[1].toFixed(3)}`;
+  if (!fameCache.has(key)) {
+    const load = wikiArticlesNear(p, FAME_RADIUS_M)
+      .then((articles) => Math.round(articles.reduce((s, a) => s + a.kb, 0)))
+      .catch(() => null);
+    if (fameCache.size > 300) fameCache.delete(fameCache.keys().next().value);
+    fameCache.set(key, load);
+  }
+  return fameCache.get(key);
+}
+
+async function placeScore(p) {
+  const [kb, data, places] = await Promise.all([
+    fameAt(p),
+    ofmFeatures(p[0], p[1]),
+    placesNear(p[0], p[1], 12).catch(() => []),
+  ]);
+  // Wikipedia non risponde: notorietà "media", per non bloccare il gioco
+  const notorieta = kb == null ? 1 : kb >= 400 ? 3 : kb >= 100 ? 2 : kb >= 15 ? 1 : 0;
+  const grandezza = places.reduce((best, pl) =>
+    (haversine(p, pl.coords) <= PLACE_RADIUS_M[pl.cls] ? Math.max(best, PLACE_SIZE[pl.cls]) : best), 0);
+  let negozi = 0;
+  for (const f of data.pois) {
+    if (f.geometry.type === 'Point' && distToSegment(p, f.geometry.coordinates, f.geometry.coordinates) <= CLUES_RADIUS_M) negozi++;
+  }
+  const indizi = negozi >= 10 ? 3 : negozi >= 4 ? 2 : negozi >= 1 ? 1 : 0;
+  const road = nearestRoad(p, data.roads);
+  const strada = road && road.dist <= ROAD_SNAP_M && MAIN_ROADS.has(road.class) ? 1 : 0;
+  return {
+    punteggio: notorieta + grandezza + indizi + strada,
+    notorieta, grandezza, indizi, strada,
+    kbWikipedia: kb, attivitaVicine: negozi,
+    abitato: isInhabited(p, data),
+  };
+}
+
+// Da dove partire per ogni livello: { start, center } (center limita quanto ci si allontana)
+async function levelStart(area, level) {
+  if (level === 'easy') {
+    // più spesso: vicino a un articolo di Wikipedia molto letto, nei dintorni di una città
+    // ("main": le città per regioni e nazioni, il centro del paese per un comune; i paesini non hanno luoghi famosi)
+    const place = await pickCenter(area, 'main').catch(() => null);
+    if (place && Math.random() < 0.7) {
+      // gli articoli lunghi sono i luoghi di cui si parla di più (monumenti, piazze, quartieri noti)
+      const famous = (await wikiArticlesNear(place.coords, 10000, 500).catch(() => []))
+        .filter((a) => a.coords && a.kb >= 20 && pointInArea(a.coords, area));
+      if (famous.length) {
+        const a = weightedPick(famous, (x) => x.kb);
+        return { start: a.coords, center: { coords: a.coords, radius: 250 } };
+      }
+    }
+    const main = await pickCenter(area, 'main').catch(() => null);
+    if (main) return { start: randomPointInDisk(main.coords, main.radius), center: main };
+    return { start: randomPointInArea(area), center: null };
+  }
+  if (level === 'medium') {
+    const place = await pickCenter(area, 'cities').catch(() => null);
+    if (place) return { start: randomPointInDisk(place.coords, place.radius), center: place };
+    return { start: randomPointInArea(area), center: null };
+  }
+  // difficile: metà delle volte un punto a caso, metà nei dintorni di un paese o di un villaggio
+  if (Math.random() < 0.5) {
+    const place = await pickCenter(area, 'cities').catch(() => null);
+    if (place) {
+      const ring = { coords: place.coords, radius: 1500 };
+      return { start: randomPointInDisk(place.coords, ring.radius), center: ring };
+    }
+  }
+  return { start: randomPointInArea(area), center: null };
+}
+
 // ---------- Ricerca di un posto ----------
 const PARALLEL = 4;   // punti cercati contemporaneamente
 const BATCHES = 8;    // tentativi prima di arrendersi
 
-async function tryRandomPoint(source, prepared, settings, usedIds) {
+async function tryRandomPoint(source, prepared, settings, usedIds, relax = 0) {
   const area = settings.weighting === 'equal'
     ? prepared[Math.floor(Math.random() * prepared.length)]
     : weightedPick(prepared, (a) => a.totalArea);
 
-  // Centri di città e paesi: parto da un punto vicino al centro e non mi allontano troppo
+  const level = settings.level || 'all';
+  const accepts = LEVELS[level];
   let center = null;
-  if (settings.zone === 'cities' || settings.zone === 'main') {
+  let start = null;
+  if (level === 'custom' && (settings.zone === 'cities' || settings.zone === 'main')) {
+    // Zona a mano: centri di città e paesi, parto vicino al centro e non mi allontano troppo
     center = await pickCenter(area, settings.zone);
     if (!center) throw new Error('NOT_FOUND');
+  } else if (accepts) {
+    ({ start, center } = await levelStart(area, level));
   }
-  const [lon, lat] = center ? randomPointInDisk(center.coords, center.radius) : randomPointInArea(area);
+  if (!start) start = center ? randomPointInDisk(center.coords, center.radius) : randomPointInArea(area);
+  const [lon, lat] = start;
   const nearCenter = (p) => !center || haversine(p.coords, center.coords) <= center.radius * 1.25;
 
   // searchAt: la fonte cerca da sola intorno al punto (Street View); search: dentro bbox sempre più grandi
@@ -791,6 +923,15 @@ async function tryRandomPoint(source, prepared, settings, usedIds) {
       } catch {
         continue; // dati dei filtri non disponibili per questo punto
       }
+      if (accepts) {
+        // i candidati di un tentativo sono tutti vicini: se il primo non è nella fascia, cambio zona
+        let score;
+        try { score = await placeScore(pic.coords); } catch { break; }
+        // in un comune non c'è quasi mai un posto famoso: "Facile" parte già un punto più in basso
+        const startRelax = level === 'easy' && MUNICIPAL_KINDS.has(area.kind) ? 1 : 0;
+        if (!accepts(score, Math.min(2, relax + startRelax))) break;
+        pic.difficulty = score;
+      }
       try {
         await source.prepare(pic);
         return { ...pic, areaName: area.name };
@@ -806,11 +947,27 @@ async function tryRandomPoint(source, prepared, settings, usedIds) {
 async function findLocation(source, prepared, settings, usedIds, onProgress) {
   for (let batch = 0; batch < BATCHES; batch++) {
     if (onProgress) onProgress(batch + 1, BATCHES);
-    const tries = Array.from({ length: PARALLEL }, () => tryRandomPoint(source, prepared, settings, usedIds));
+    // ogni 3 giri a vuoto la fascia di difficoltà si allarga di un punto (al massimo 2)
+    const relax = Math.min(2, Math.floor(batch / 3));
+    const tries = Array.from({ length: PARALLEL }, () => tryRandomPoint(source, prepared, settings, usedIds, relax));
     try {
       return await Promise.any(tries);
     } catch (err) {
       if (err.errors.some((e) => e.message === 'TOKEN')) throw new Error('TOKEN');
+    }
+  }
+  // Rete di sicurezza: se la fascia di difficoltà non dà risultati, meglio un posto qualsiasi
+  // della zona che interrompere la partita. Il posto resta segnato nei registri delle segnalazioni.
+  if (LEVELS[settings.level]) {
+    diag(`difficoltà "${settings.level}": nessun posto nella fascia, uso un posto qualsiasi`);
+    const anySettings = { ...settings, level: 'all' };
+    for (let batch = 0; batch < 2; batch++) {
+      const tries = Array.from({ length: PARALLEL }, () => tryRandomPoint(source, prepared, anySettings, usedIds));
+      try {
+        return { ...(await Promise.any(tries)), levelFallback: true };
+      } catch {
+        // si riprova una volta, poi errore
+      }
     }
   }
   throw new Error(deadHosts.size ? 'SERVERS_DOWN' : 'NOT_FOUND');
@@ -909,15 +1066,14 @@ function updateHints() {
   } else if (s.filterOfficial) {
     notes.push('"Solo foto delle auto Google" vale solo con Street View.');
   }
-  if (s.zone === 'main' && state.areas.some((a) => !MUNICIPAL_KINDS.has(a.kind))) {
+  if (s.level === 'custom' && s.zone === 'main' && state.areas.some((a) => !MUNICIPAL_KINDS.has(a.kind))) {
     notes.push('Per regioni, nazioni e continenti il "centro principale" sono i centri delle città.');
   }
   $('#source-hint').textContent = notes.join(' ');
 
-  // La difficoltà mostra la combinazione che corrisponde a zona e filtri, o "Personalizzata"
-  const match = Object.keys(DIFFICULTIES).find((k) =>
-    Object.entries(DIFFICULTIES[k]).every(([key, value]) => s[key] === value));
-  $('#difficulty').value = match || 'custom';
+  // La Zona si sceglie a mano solo con la difficoltà "Personalizzata"
+  $('#zone-row').hidden = s.level !== 'custom';
+  $('#level-hint').textContent = LEVEL_HINTS[s.level] || '';
   if (!state.areas.length) {
     $('#score-hint').textContent = 'Aggiungi almeno un\'area per vedere come verrà calcolato il punteggio.';
     return;
@@ -1337,7 +1493,7 @@ function initSetup() {
 
   document.querySelectorAll('[data-key]').forEach((el) => el.addEventListener('change', updateHints));
   $('#difficulty').addEventListener('change', (e) => {
-    const preset = DIFFICULTIES[e.target.value];
+    const preset = LEVEL_FILTERS[e.target.value];
     if (!preset) return;
     Object.entries(preset).forEach(([key, value]) => {
       const el = document.querySelector(`[data-key="${key}"]`);
@@ -1669,7 +1825,7 @@ function showSetupError(msg) {
 // la prima volta che si preme "Cambia posto" in una partita. In più, se attivo in config.js, ogni round
 // manda un registro leggero, per confrontare i posti riusciti con quelli segnalati.
 // Si inviano solo dati tecnici (niente nome, email o account) a un Modulo Google indicato in config.js.
-const APP_VERSION = '7';
+const APP_VERSION = '14';
 const diagLog = [];
 
 function diag(msg) {
@@ -1737,7 +1893,7 @@ async function buildReport(tipo, esito) {
     esito,
     fonte: s.source,
     impostazioni: {
-      zona: s.zone, soloAutoGoogle: s.filterOfficial, nienteAutostrade: s.filterNoHighways,
+      livello: s.level, zona: s.zone, soloAutoGoogle: s.filterOfficial, nienteAutostrade: s.filterNoHighways,
       nienteGallerie: s.filterNoTunnels, movimento: s.moveMode, solo360: s.panoOnly,
     },
     aree: state.areas.map((a) => ({ nome: a.name, tipo: a.kind })),
@@ -1752,6 +1908,8 @@ async function buildReport(tipo, esito) {
       direzione: loc.heading == null ? null : Math.round(loc.heading),
       lineaAutoGoogle: loc.lineLike,
       area: loc.areaName,
+      difficolta: loc.difficulty || null,
+      difficoltaNonRispettata: !!loc.levelFallback,
     } : null,
     riquadro: g && g.source === streetViewSource ? $('#sv-frame').src : null,
     copertura: null,

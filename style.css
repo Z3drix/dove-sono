@@ -114,6 +114,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .settings label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); grid-column: 1 / -1; }
 .settings label.check input { width: auto; }
 .settings label.wide { grid-column: 1 / -1; }
+.settings label[hidden] { display: none; }
+.level-hint { grid-column: 1 / -1; margin: -4px 0 0; font-size: .85rem; color: var(--muted); }
 .settings-title { grid-column: 1 / -1; margin: 8px 0 -4px; padding-top: 12px; border-top: 1px solid var(--line); font-weight: 600; }
 .settings-title small { font-weight: 400; color: var(--muted); margin-left: 6px; }
 
